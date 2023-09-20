@@ -1,78 +1,126 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.Serialization;
+using Object = UnityEngine.Object;
 
 namespace SelectionHistory {
-    /// <summary>
-    /// Adds Back and Forward items to the Edit > Selection menu to navigate between Hierarchy and Project pane selections.
-    /// </summary>
-    [InitializeOnLoad]
-    static class SelectionHistoryNavigator {
-        static Object activeSelection;
-        static bool ignoreNextSelectionChangedEvent;
-        static readonly Stack<Object> nextSelections = new Stack<Object>();
-        static readonly Stack<Object> previousSelections = new Stack<Object>();
+    [Serializable]
+    struct SelectionRecord {
+        public Object Object;
+        [FormerlySerializedAs("IsPrefabStageOpen")] public bool   WasPrefabStageOpen;
+    }
 
-        static SelectionHistoryNavigator() {
-            Selection.selectionChanged += SelectionChangedHandler;
+    class SelectionHistoryNavigator : ScriptableObject {
+        [SerializeField] Object _activeSelection;
+        [SerializeField] bool _ignoreNextSelectionChangedEvent;
+        [SerializeField] List<SelectionRecord> _nextSelections = new();
+        [SerializeField] List<SelectionRecord> _previousSelections = new();
+
+        static SelectionHistoryNavigator _instance;
+
+        static SelectionHistoryNavigator Instance {
+            get {
+                if(_instance != null)
+                    return _instance;
+                _instance = FindObjectOfType<SelectionHistoryNavigator>();
+                if(_instance == null)
+                    _instance = CreateInstance<SelectionHistoryNavigator>();
+                return _instance;
+            }
         }
 
-        static void SelectionChangedHandler() {
-            if(ignoreNextSelectionChangedEvent) {
-                ignoreNextSelectionChangedEvent = false;
+        [InitializeOnLoadMethod]
+        static void Initialize() {
+            if(Instance == null)
+                return;
+            
+            Selection.selectionChanged -= Instance.SelectionChangedHandler;
+            Selection.selectionChanged += Instance.SelectionChangedHandler;
+        }
+
+        void SelectionChangedHandler() {
+            Debug.Log($"{nameof(SelectionChangedHandler)}: _ignoreNextSelectionChangedEvent: {_ignoreNextSelectionChangedEvent}, _activeSelection: {_activeSelection}, Selection.activeObject: {Selection.activeObject}");
+            if(_ignoreNextSelectionChangedEvent) {
+                _ignoreNextSelectionChangedEvent = false;
                 return;
             }
 
-            if(activeSelection != null) {
-                previousSelections.Push(activeSelection);
-            }
+            if(_activeSelection != null)
+                _previousSelections.Add(GetSelectionRecord());
 
-            activeSelection = Selection.activeObject;
-            nextSelections.Clear();
+            _activeSelection = Selection.activeObject;
+            _nextSelections.Clear();
         }
 
-        const string backMenuLabel = "Edit/Selection/Back %-";
-        const string forwardMenuLabel = "Edit/Selection/Forward %+";
+        SelectionRecord GetSelectionRecord() {
+            return new SelectionRecord {
+                Object             = _activeSelection,
+                WasPrefabStageOpen = PrefabStageUtility.GetCurrentPrefabStage() != null 
+            };
+        }
 
-        static void OpenPrefabStageIfAppropriate() {
-            if(Selection.activeObject != null && PrefabUtility.IsPartOfPrefabAsset(Selection.activeObject)) {
+        const string kLabelBackMenu    = "Edit/Selection/Back %-";
+        const string kLabelForwardMenu = "Edit/Selection/Forward %+";
+
+        void OpenPrefabStageIfAppropriate(SelectionRecord inRecord) {
+            Selection.activeObject    = inRecord.Object;
+            Instance._activeSelection = Selection.activeObject;
+            if(Selection.activeObject == null)
+                return;
+            
+            if(inRecord.WasPrefabStageOpen)
                 AssetDatabase.OpenAsset(Selection.activeObject);
-            }
+            else
+                StageUtility.GoBackToPreviousStage();
         }
 
-        [MenuItem(backMenuLabel)]
+        [MenuItem(kLabelBackMenu)]
         static void Back() {
-            if(activeSelection != null) {
-                nextSelections.Push(activeSelection);
-            }
+            if(Instance._activeSelection != null)
+                Instance._nextSelections.Add(Instance.GetSelectionRecord());
 
-            Selection.activeObject = previousSelections.Pop();
-            activeSelection = Selection.activeObject;
-            OpenPrefabStageIfAppropriate();
-            ignoreNextSelectionChangedEvent = true;
+            var record = Instance._previousSelections[^1];
+            Instance._previousSelections.RemoveAt(Instance._previousSelections.Count - 1);
+            Instance.OpenPrefabStageIfAppropriate(record);
+            Instance._ignoreNextSelectionChangedEvent = true;
         }
 
-        [MenuItem(forwardMenuLabel)]
+        [MenuItem(kLabelForwardMenu)]
         static void Forward() {
-            if(activeSelection != null) {
-                previousSelections.Push(activeSelection);
-            }
+            if(Instance == null)
+                return;
+            if(Instance._activeSelection != null)
+                Instance._previousSelections.Add(Instance.GetSelectionRecord());
+            if(Instance._nextSelections.Count == 0)
+                return;
 
-            Selection.activeObject = nextSelections.Pop();
-            activeSelection = Selection.activeObject;
-            OpenPrefabStageIfAppropriate();
-            ignoreNextSelectionChangedEvent = true;
+            var record = Instance._nextSelections[^1];
+            Instance._nextSelections.RemoveAt(Instance._nextSelections.Count - 1);
+            Instance.OpenPrefabStageIfAppropriate(record);
+            Instance._ignoreNextSelectionChangedEvent = true;
         }
 
-        [MenuItem(backMenuLabel, true)]
+        [MenuItem(kLabelBackMenu, true)]
         static bool ValidateBack() {
-            return previousSelections.Count > 0;
+            return Instance._previousSelections.Count > 0;
         }
 
-        [MenuItem(forwardMenuLabel, true)]
+        [MenuItem(kLabelForwardMenu, true)]
         static bool ValidateForward() {
-            return nextSelections.Count > 0;
+            return Instance._nextSelections.Count > 0;
+        }
+
+        [MenuItem("Edit/Selection/View History Navigator")]
+        static void ViewHistoryNavigator() {
+            Instance._ignoreNextSelectionChangedEvent = true;
+            Selection.activeObject = Instance;
+        }
+
+        void OnDestroy() {
+            Selection.selectionChanged -= SelectionChangedHandler;
         }
     }
 }
