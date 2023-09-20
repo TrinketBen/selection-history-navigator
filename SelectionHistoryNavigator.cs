@@ -32,8 +32,8 @@ namespace SelectionHistory {
             nextSelections.Clear();
         }
 
-        const string backMenuLabel = "Edit/Selection/Back %[";
-        const string forwardMenuLabel = "Edit/Selection/Forward %]";
+        const string backMenuLabel = "Edit/Selection/Back %-";
+        const string forwardMenuLabel = "Edit/Selection/Forward %+";
 
         static void OpenPrefabStageIfAppropriate() {
             if(Selection.activeObject != null && PrefabUtility.IsPartOfPrefabAsset(Selection.activeObject)) {
