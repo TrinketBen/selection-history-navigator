@@ -3,19 +3,21 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
-using UnityEngine.Serialization;
-using Object = UnityEngine.Object;
+using UObject = UnityEngine.Object;
 
 namespace SelectionHistory {
     [Serializable]
     struct SelectionRecord {
-        public Object Object;
-        [FormerlySerializedAs("IsPrefabStageOpen")] public bool   WasPrefabStageOpen;
+        public UObject Object;
+        public string  Path;
+        public UObject AssetSource;
+        public bool    WasPrefabStageOpen;
     }
 
     class SelectionHistoryNavigator : ScriptableObject {
-        [SerializeField] Object _activeSelection;
-        [SerializeField] bool _ignoreNextSelectionChangedEvent;
+        [SerializeField] UObject _activeSelection;
+        [SerializeField] bool _ignoreNext;
+        [SerializeField] bool _wasPrefabStageOpen;
         [SerializeField] List<SelectionRecord> _nextSelections = new();
         [SerializeField] List<SelectionRecord> _previousSelections = new();
 
@@ -33,37 +35,47 @@ namespace SelectionHistory {
         }
 
         [InitializeOnLoadMethod]
-        static void Initialize() {
-            if(Instance == null)
-                return;
-            
-            Selection.selectionChanged -= Instance.SelectionChangedHandler;
-            Selection.selectionChanged += Instance.SelectionChangedHandler;
+        static void Initialize()
+        {
+            var _ = Instance;
         }
 
-        void SelectionChangedHandler() {
-            Debug.Log($"{nameof(SelectionChangedHandler)}: _ignoreNextSelectionChangedEvent: {_ignoreNextSelectionChangedEvent}, _activeSelection: {_activeSelection}, Selection.activeObject: {Selection.activeObject}");
-            if(_ignoreNextSelectionChangedEvent) {
-                _ignoreNextSelectionChangedEvent = false;
+        void OnEnable()
+        {
+            Selection.selectionChanged -= Instance.SelectionChanged;
+            Selection.selectionChanged += Instance.SelectionChanged;
+        }
+
+        void SelectionChanged() {
+            Debug.Log($"{nameof(SelectionChanged)}: IgnoreNext: {_ignoreNext}, Previous: {_activeSelection}, Current: {Selection.activeObject}", Selection.activeContext);
+            if(_ignoreNext) {
+                _ignoreNext = false;
                 return;
             }
 
             if(_activeSelection != null)
                 _previousSelections.Add(GetSelectionRecord());
 
-            _activeSelection = Selection.activeObject;
+            _wasPrefabStageOpen = PrefabStageUtility.GetCurrentPrefabStage() != null;
+            _activeSelection    = Selection.activeObject;
             _nextSelections.Clear();
         }
 
-        SelectionRecord GetSelectionRecord() {
+        SelectionRecord GetSelectionRecord()
+        {
+            var prefabAssetPath = PrefabStageUtility.GetCurrentPrefabStage()?.assetPath;
             return new SelectionRecord {
                 Object             = _activeSelection,
-                WasPrefabStageOpen = PrefabStageUtility.GetCurrentPrefabStage() != null 
+                Path               = GetHierarchyPath((_activeSelection as GameObject)?.transform),
+                AssetSource        = !string.IsNullOrEmpty(prefabAssetPath) ?
+                    AssetDatabase.LoadAssetAtPath<GameObject>(prefabAssetPath) :
+                    null,
+                WasPrefabStageOpen = _wasPrefabStageOpen 
             };
         }
 
-        const string kLabelBackMenu    = "Edit/Selection/Back %-";
-        const string kLabelForwardMenu = "Edit/Selection/Forward %+";
+        const string kLabelBackMenu    = "Edit/Selection/Back &-";
+        const string kLabelForwardMenu = "Edit/Selection/Forward &=";
 
         void OpenPrefabStageIfAppropriate(SelectionRecord inRecord) {
             Selection.activeObject    = inRecord.Object;
@@ -85,7 +97,7 @@ namespace SelectionHistory {
             var record = Instance._previousSelections[^1];
             Instance._previousSelections.RemoveAt(Instance._previousSelections.Count - 1);
             Instance.OpenPrefabStageIfAppropriate(record);
-            Instance._ignoreNextSelectionChangedEvent = true;
+            Instance._ignoreNext = true;
         }
 
         [MenuItem(kLabelForwardMenu)]
@@ -100,7 +112,7 @@ namespace SelectionHistory {
             var record = Instance._nextSelections[^1];
             Instance._nextSelections.RemoveAt(Instance._nextSelections.Count - 1);
             Instance.OpenPrefabStageIfAppropriate(record);
-            Instance._ignoreNextSelectionChangedEvent = true;
+            Instance._ignoreNext = true;
         }
 
         [MenuItem(kLabelBackMenu, true)]
@@ -115,12 +127,24 @@ namespace SelectionHistory {
 
         [MenuItem("Edit/Selection/View History Navigator")]
         static void ViewHistoryNavigator() {
-            Instance._ignoreNextSelectionChangedEvent = true;
+            Instance._ignoreNext = true;
             Selection.activeObject = Instance;
         }
 
-        void OnDestroy() {
-            Selection.selectionChanged -= SelectionChangedHandler;
+        void OnDisable() {
+            Selection.selectionChanged -= SelectionChanged;
+        }
+        
+        string GetHierarchyPath(Transform inTransform) {
+            if (!inTransform)
+                return string.Empty;
+            
+            var path = inTransform.name;
+            while(inTransform && inTransform.transform.parent) {
+                inTransform = inTransform.transform.parent;
+                path = inTransform.name + "/" + path;
+            }
+            return path;
         }
     }
 }
